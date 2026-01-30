@@ -1,0 +1,125 @@
+using System;
+using System.Collections.Generic;
+using System.Threading;
+
+// 1. Task interface
+public interface ITask
+{
+    void DoWork();
+}
+
+// 2. Simple task implementation
+public class PrintTask : ITask
+{
+    private readonly int _id;
+
+    public PrintTask(int id)
+    {
+        _id = id;
+    }
+
+    public void DoWork()
+    {
+        Console.WriteLine($"[Consumer] Executing task {_id} on thread {Thread.CurrentThread.ManagedThreadId}");
+    }
+}
+
+// 3. Custom Blocking Queue (no built-in concurrent collections)
+public class BlockingQueue
+{
+    private readonly Queue<ITask> _queue = new Queue<ITask>();
+    private readonly object _lock = new object();
+    private bool isDone=false;
+
+    public void MarkDone()
+    {
+        isDone = true;
+    }
+    public bool GetIsDone()
+    {
+        return isDone;
+    }
+
+    public void Put(ITask task,bool IsLast)
+    {
+        lock (_lock)
+        {
+            if (IsLast)
+            {
+                MarkDone(); //updating the status 
+            }
+            _queue.Enqueue(task);
+            // wake up waiting consumers
+            Monitor.PulseAll(_lock);
+        }
+    }
+
+    public ITask Take()
+    {
+        lock (_lock)
+        {
+            // wait while queue is empty
+            while (_queue.Count == 0)
+            {
+                Console.WriteLine("consumer is sleep for 2000 ms");
+               // Thread.Sleep(2000);
+                Monitor.Wait(_lock); // release lock and wait  until the queue becomes data 
+            }                     //how it know it will have data means from the producer they wake this up
+
+            return _queue.Dequeue();
+        }
+    }
+
+    public int GetQueueSize() 
+    {
+        return _queue.Count;
+    }
+}
+
+class Program
+{
+    static void Main(string[] args)
+    {
+        var queue = new BlockingQueue();
+
+        // Producer thread
+        Thread producer = new Thread(() =>
+        {
+            for (int i = 1; i <= 10; i++)
+            { 
+                Console.WriteLine($"[Producer] Producing task {i}");
+
+                if(i==10)
+                queue.Put(new PrintTask(i),true);
+                else 
+                queue.Put(new PrintTask(i),false);
+
+                    Thread.Sleep(300); // simulate delay between jobs
+            }
+
+            queue.MarkDone();
+        });
+
+        // Consumer thread
+        Thread consumer = new Thread(() =>
+        {
+            while (true)
+            {
+                ITask task = queue.Take(); // blocks if empty
+                task.DoWork();
+                Thread.Sleep(4000);
+
+                if (queue.GetIsDone() && queue.GetQueueSize()==0)
+                    break;
+            }
+        });
+
+        // Start consumer first so it waits on empty queue
+        consumer.Start();
+        producer.Start();
+
+        consumer.Join(); // wait for producer to finish
+        Console.WriteLine("Producer finished. Press Enter to exit...");
+        Console.ReadLine(); // keep app alive to see consumer output
+    }
+}
