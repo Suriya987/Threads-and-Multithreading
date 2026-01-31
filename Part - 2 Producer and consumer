@@ -1,0 +1,199 @@
+using System;
+
+class work
+{
+    private readonly string name;
+    public work(string name)
+    {
+        this.name = name;
+    }
+
+    public string getName()
+    {
+        return name;
+    }
+
+    public void DoWork()
+    {
+        Console.WriteLine($"{name} is executed successfully");
+    }
+}
+
+class workDetails
+{
+    private DateTime ExecuteAt;
+    private work _work;
+
+    public workDetails(DateTime delay, work curr) 
+    {
+        ExecuteAt = delay;
+        _work = curr;
+    }
+
+    public work getWork()
+    {
+        return _work;
+    }
+
+    public DateTime getMs()
+    {
+        return ExecuteAt;
+    }
+}
+
+class DC
+{
+    private List<workDetails> _works;
+    private readonly object _lock=new object();
+    public bool _IsDone=false;
+    public DC()
+    {
+        _works = new List<workDetails>();  //initiating the works 
+    }
+
+    public int GetCount() {
+
+        lock (_lock)
+        {
+            return _works.Count;
+        }
+    }
+
+    public void MarkDone()
+    {
+        lock(_lock)
+        {
+            Console.WriteLine("Marking Done by producer");
+            _IsDone=true;
+        }
+    }
+
+    public bool GetStatus()
+    {
+        lock(_lock)
+        {
+            return _IsDone;
+        }
+    }
+
+    public void AddWork(workDetails work)
+    {
+        //arrange based on the  ExecuteAt time 
+       
+
+        lock (_lock)
+        {
+            Console.WriteLine("Producer take the lock and adding..");
+            
+            int count = _works.Count;
+            Console.WriteLine($"Works exist : {count}");
+            int ind = 0;
+            while (ind < count && work.getMs() >= _works[ind].getMs())
+            {
+                ind++;
+            }
+            _works.Insert(ind, work);
+            Console.WriteLine($"new work is added and curr count is {_works.Count}");
+            Console.WriteLine("Producer wakes all the sleep thread");
+            Monitor.PulseAll(_lock);
+        }        
+    }
+
+    public work GetWork()
+    {
+        //blindly i will pick from the top one that too if it comes under my time 
+
+        work? currWork = null;
+
+        lock (_lock)
+        {
+
+            Console.WriteLine($"CurrTaskCount : {GetCount()}");
+            if (_works.Count > 0)
+            {
+                     Console.WriteLine("Consumer acquires a lock");
+                    if (_works[0].getMs() > DateTime.UtcNow)
+                    {
+                        Console.WriteLine($"Consumer : Thread is in sleep mode : {DateTime.UtcNow} ");
+                        Monitor.Wait(_lock, _works[0].getMs() - DateTime.UtcNow);
+                        Console.WriteLine($"Consumer threads wakes up by itslef : {DateTime.UtcNow}");
+                    }
+                    currWork = _works[0].getWork();
+                    _works.Remove(_works[0]);  
+            }
+            else
+            {
+                Console.WriteLine("Due to no task exists it just waiting here in the getwork");
+                Monitor.Wait(_lock);
+            }
+        }
+        return currWork;
+    }
+}
+
+
+class User
+{
+    static void Main(string[] args)
+    {
+        DC DataCenter = new DC();
+
+        Console.WriteLine("Main thread starts");
+
+        Thread Producer = new Thread(() =>
+        {
+            for (int i = 0; i < 2; i++)
+            {
+                Console.WriteLine($" Task : {i}  is Taken to adding by producer ");
+                work currWork = new work($"{i}");
+                DateTime ExecuteAt = DateTime.UtcNow.AddSeconds(i * 2);
+                workDetails workDetails = new workDetails(ExecuteAt, currWork);
+                DataCenter.AddWork(workDetails);
+                if (i == 1)
+                    DataCenter.MarkDone();
+                Thread.Sleep(1000);
+            }
+        });
+
+        Thread Consumer = new Thread(() =>
+        {
+            while (true)
+            {
+                Console.WriteLine("Consumer starts executing:");
+                work currWork = DataCenter.GetWork();
+
+                Console.WriteLine($"currWork: {currWork} : May be null");
+                if (currWork != null)
+                {
+                    Console.WriteLine($"Consumer started executing work : {currWork.getName()} ");
+                    currWork.DoWork();
+                }
+
+                if (DataCenter.GetStatus() == true && DataCenter.GetCount() == 0)
+                {
+                    Console.WriteLine("Consumer breaks");
+                    break;
+                }
+
+                //Thread.Sleep(3000);
+            }
+        });
+
+        Consumer.Start();
+        Producer.Start();
+
+        Console.WriteLine("Main thread waits .. ");
+        Producer.Join();
+        Console.WriteLine("Producer produced successfully");
+        Console.WriteLine($"Work count:{DataCenter.GetCount()}");
+        Console.ReadLine();
+
+    }
+}
+
+//w5 , 1000  0  
+//w1 , 3000  1  
+//w2,  5000  2
+//w4,  7000  3
+
+//w6 , 6000 
