@@ -1,0 +1,221 @@
+using System;
+
+class work
+{
+    private string name;
+    private bool LowPriority;
+
+    public work(string name,bool priorityStatus)
+    {
+        this.name = name;
+        this.LowPriority = priorityStatus;
+    }
+
+    public bool GetPriority()
+    { 
+        return LowPriority; 
+    }
+
+    public string GetName()
+    {
+        return name;
+    }
+}
+
+class DC
+{
+    private List<work> LowPriority;
+    private List<work> HighPriority;
+    private bool isDone=false;
+
+    private object _lock=new object();  //using the shared lock object for synchronization
+    public DC()
+    {
+        LowPriority = new List<work>();
+        HighPriority = new List<work>();
+    }
+
+    public void SetWorkDone(bool done)
+    {
+        lock (_lock)
+        {
+            isDone = done;
+            Monitor.PulseAll(_lock);
+        }
+    }
+
+    public bool isCompleted()
+    {
+        lock (_lock)
+        {
+            return LowPriority.Count == 0 && HighPriority.Count == 0;
+        }
+    }
+
+    public void AddWork(work work)
+    {
+        lock(_lock) // why lock using shared object instead of normal lock ?
+        {
+            Console.WriteLine("Lock is acquired by producer");
+            Console.WriteLine($"Work is added  {work.GetName()}");
+            if (work.GetPriority())
+            {
+                Console.WriteLine("Work is added into the Low priority");
+                LowPriority.Add(work);
+            }
+            else
+            {
+                Console.WriteLine("Work is added into the high priority");
+                HighPriority.Add(work);
+            }
+
+           Console.WriteLine("Waking up all the threads");
+           Monitor.PulseAll(_lock); //here assume we created many  consumer threads which will be awaken
+        }
+    }
+
+    public bool GetStatus()
+    {
+        lock(_lock)
+        {
+            return isDone;
+        }
+    }
+    public work GetWork()
+    {
+        lock (_lock)
+        {
+            //wait here until the some work is exist
+            while(HighPriority.Count==0 && LowPriority.Count==0)
+            {
+
+                if (GetStatus())
+                    return null;
+
+                Console.WriteLine($"Consumer is in sleep mode : {Thread.CurrentThread.ManagedThreadId}");
+                Monitor.Wait(_lock); //wait until the work comes
+                Console.WriteLine($"Consumer {Thread.CurrentThread.ManagedThreadId} is waked up");
+            }
+
+            //if the thread comes below means then any of the work is created 
+
+             //so based on our requirement we have to process the high priority and then low priority
+
+            if(HighPriority.Count>0)
+            {
+                work currWork = HighPriority[0];
+                HighPriority.Remove(currWork);
+                Console.WriteLine($"Consumer {Thread.CurrentThread.ManagedThreadId} is processing the work : {currWork.GetName()}");
+                return currWork;
+            }
+
+            //if the high priority is not exist then we go for low priority
+            work curr = LowPriority[0];
+            LowPriority.Remove(curr);
+            Console.WriteLine($"Consumer {Thread.CurrentThread.ManagedThreadId} is processing the work : {curr.GetName()}");
+            return curr;
+        }
+
+        //get high priority
+        //lock (_lock)
+        //{
+        //    if( HighPriority.Count !=0 )
+        //    {
+        //        work currWork=HighPriority[0];
+        //        Console.WriteLine($"consumer processing High priority : Thread name {Thread.CurrentThread.ManagedThreadId}");
+        //        HighPriority.Remove(currWork);
+        //        return currWork;
+        //    }
+        //    else if (LowPriority.Count==0)
+        //        Monitor.Wait(_lock);
+        //}
+        ////if high priority is not exist then go for low priority 
+        //lock (_lock)
+        //{
+        //    if(LowPriority.Count!=0 && HighPriority.Count==0)
+        //    {
+        //        work currWork=LowPriority[0];
+        //        Console.WriteLine($"Consumer processing low priority{Thread.CurrentThread.ManagedThreadId}");
+        //        LowPriority.Remove(currWork);
+        //        return currWork;
+        //    }
+        //    else if(HighPriority.Count==0)
+        //        Monitor.Wait(_lock);
+
+        //}
+
+      //  return null;
+    }
+    
+}
+
+class User
+{
+    static void Main(string[] args)
+    {
+        DC dc = new DC();
+
+        List<Thread> threads = new List<Thread>();
+        int ThreadCount = 3;
+
+        Thread producer = new Thread(() =>
+        {
+            for (int i = 0; i < 3; i++)
+            {
+                
+                bool status = true;
+                if (i % 2 == 0)
+                    status = false;
+                work curr = new work($"{i}", status);
+                Console.WriteLine($"Producer producing  Job :{curr.GetName()} ");
+                dc.AddWork(curr);
+
+                if (i == 2)
+                    dc.SetWorkDone(true);
+            }
+        });
+
+        for (int i = 1; i <= ThreadCount; i++)
+        {
+           
+            Thread consumer = new Thread(() =>
+            {
+                while(true)
+                {
+                    // Thread.Sleep(2000);
+                    //  Console.WriteLine("Current consumer is sleeping for 2s .....");
+
+                    if (dc.isCompleted() && dc.GetStatus())
+                    {
+                        Console.WriteLine($"Thread {Thread.CurrentThread.ManagedThreadId} is exited.");
+                        //threads.Remove(Thread.CurrentThread);
+                        break;
+                    }
+
+                    work curr= dc.GetWork();
+                    if (curr != null)
+                        Console.WriteLine($" Consumer processed this : {curr.GetName()}");
+                    else
+                        Console.WriteLine("No data to process");
+
+                }
+            });
+
+            threads.Add(consumer);
+            consumer.Start();
+        }
+
+        producer.Start();
+        producer.Join();
+        Console.WriteLine("producer done");
+
+        //while (threads.Count != 0)
+        //{
+        //    Console.WriteLine("Still threads are executing in process");
+        //}
+
+        //Console.WriteLine($"Consumer threads are cleared from the memory current count : {threads.Count}");
+
+        Console.ReadLine();
+    }
+}
