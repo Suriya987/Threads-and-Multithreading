@@ -1,0 +1,380 @@
+using System;
+class work
+{
+    private string Name;
+    public work(string name)
+    {
+        Name=name;
+    }
+    public string getName()
+    {
+        return Name;
+    }
+
+    public void DoWork()
+    {
+        Console.WriteLine($" Work : {Name}  is processed");
+    }
+}
+
+class RequestMiddleWare
+{
+    private readonly DataCenter Dc;
+    private readonly RateLimiter rateLimiter;
+    public RequestMiddleWare(DataCenter dataCenter,RateLimiter rateLimiter)
+    {
+        Dc = dataCenter;
+        this.rateLimiter = rateLimiter;
+    }
+
+    public void SubmitRequest(work _work)
+    {
+        //checks the current request is allowed or not based on the user Id 
+        if(rateLimiter.IsRequestAllowed())
+        {
+            Console.WriteLine($"Request with workName == {_work.getName()} is allowed  ");
+            Dc.AddWork(_work);
+        }
+        else
+        {
+            Console.WriteLine($"Request is cancelled due to insufficient tokens , please try again");
+        }
+    }
+
+}
+
+class RateLimiter
+{
+    private List<int> Tokens;
+    private int MaxCount = 0;
+    private List<DateTime> RefillRate;
+    private object _lock=new object();
+    public RateLimiter(int tokenCount)
+    {
+        Tokens= new List<int>();
+        MaxCount = tokenCount;
+        for (int i = 0; i < MaxCount; i++)
+        {
+            Tokens.Add(1);
+        }
+        RefillRate = new List<DateTime>();
+        Console.WriteLine("Calling the refill method and it will wait until request comes");
+        
+    }
+
+    public DateTime? GetTopRefilltime()
+    {
+        
+            if (RefillRate.Count == 0)
+                return null;
+
+            return RefillRate[0];
+        
+    }
+
+    public bool IsRequestAllowed()
+    {
+        lock(_lock)
+        {
+            Console.WriteLine($"Current thread {Thread.CurrentThread.ManagedThreadId} is obtained lock");
+
+         //   Thread.Sleep(100);
+
+            if (Tokens.Count == 0)
+            {
+                Console.WriteLine(" Token count is 0 so no request will allowed further , wait for sometime");
+                return false;
+            }
+            DateTime refilltime = DateTime.UtcNow.AddMilliseconds(12);
+            RefillRate.Add(refilltime);
+            int tk = Tokens[0];
+            Tokens.Remove(tk);
+            Console.WriteLine("One token is consumed and awaking all the threads");
+            Monitor.PulseAll(_lock);
+            return true;
+          
+        }
+    }
+    public void Refill()
+    {
+        Thread th = new Thread(() =>
+        {
+            while (true)
+            {
+                lock (_lock)
+                {
+                    while (true)
+                    {
+                        if (RefillRate.Count == 0)
+                        {
+                            Console.WriteLine("No refill scheduled → sleeping indefinitely");
+                            Monitor.Wait(_lock);
+                            continue;
+                        }
+
+                        RefillRate.Sort();
+                        DateTime nextRefill = RefillRate[0];
+                        TimeSpan waitTime = nextRefill - DateTime.UtcNow;
+
+                        if (waitTime > TimeSpan.Zero)
+                        {
+                            Console.WriteLine($"Next refill in {waitTime.TotalMilliseconds} ms");
+                            Monitor.Wait(_lock, waitTime);
+                            continue;
+                        }
+
+                        // Time reached → break inner loop to refill
+                        break;
+                    }
+
+                    // 🔥 Safe refill
+                    RefillRate.RemoveAt(0);
+
+                    if (Tokens.Count < MaxCount)
+                    {
+                        Tokens.Add(1);
+                        Console.WriteLine("Token refilled");
+                    }
+                }
+            }
+        });
+
+        th.IsBackground = true;
+        th.Start();
+    }
+
+
+    /* public void Refill()
+     {
+             Console.WriteLine($" RateLimiter - - -> Refill()  Main thread is going to create a new thread");
+             Thread th = new Thread(() =>
+             {
+
+                 while (true)
+                 {
+                     lock (_lock)
+                     {
+
+                         int count = RefillRate.Count;
+                         RefillRate.Sort();
+                         DateTime? dateTime = GetTopRefilltime();
+
+                         Console.WriteLine($" current RefillCount= {count} ,  RefillToptime = {dateTime} or null");
+
+                         if (count == 0 || dateTime != null && dateTime > DateTime.UtcNow)
+                         {
+
+                             Console.WriteLine($"Thread Id : {Thread.CurrentThread.ManagedThreadId} is in sleep mode");
+
+                             if (count == 0)
+                                 Monitor.Wait(_lock);
+                             else
+                             {
+                                 Console.WriteLine("Thread is in sleep mode becoz of there is still time for refilling ");
+                                 DateTime curr = dateTime ?? DateTime.UtcNow;
+                                 TimeSpan waitTime = curr - DateTime.UtcNow;  //might be negative so 
+                                 int WaitMs = Math.Max(0, (int)waitTime.TotalMilliseconds);
+                                 Monitor.Wait(_lock, WaitMs);
+                             }
+                             Console.WriteLine($" Thread Id {Thread.CurrentThread.ManagedThreadId} is waked up and will start refill");
+                         }
+
+
+                         if (RefillRate.Count > 0 && GetTopRefilltime() < DateTime.UtcNow)
+                         {
+                             Console.WriteLine("Token is added . . . . .. .  ");
+                             RefillRate.RemoveAt(0);
+                             if (Tokens.Count < MaxCount)
+                             {
+                                 Tokens.Add(1);
+                             }
+                         }
+                         else
+                             Console.WriteLine("Some one is waked up thread , due to time constraints it is now adding token");
+                     }
+                 }
+
+             });
+
+         th.Start();
+     }*/
+}
+
+class DataCenter
+{
+    private readonly List<work> _works;
+    private readonly object _lock = new object();  //how about having many locks
+    private bool IsDone = false;
+    public DataCenter()
+    {
+        _works = new List<work>();
+    }
+
+    public void SetDone()
+    {
+        Console.WriteLine($"ThreadId : {Thread.CurrentThread.ManagedThreadId} is about to acquire the lock . DateTime : {DateTime.UtcNow}");
+        lock(_lock)
+        {
+            Console.WriteLine($"Thread ID : {Thread.CurrentThread.ManagedThreadId} is Updated the status ");
+            IsDone=true;
+        }
+    }
+
+    public void AddWork(work Work)
+    {
+        lock (_lock)
+        {
+            Console.WriteLine($" AddWork() :  ThreadId : {Thread.CurrentThread.ManagedThreadId} is acquired lock for adding new work");
+            Console.WriteLine($"Work : {Work.getName()} is added successfully");
+            _works.Add(Work);
+            Console.WriteLine($"ThreadId : {Thread.CurrentThread.ManagedThreadId} is releasing the lock and waking up the sleeping thread");
+            Monitor.PulseAll(_lock); // Releasing the lock at the same time it is waking up all the thread do  their work 
+        }
+    }
+
+    public int getWorkPending()
+    {
+        Console.WriteLine($" GetWorkCount() :  Thread Id : {Thread.CurrentThread.ManagedThreadId} is going to acquire the lock to get work");
+
+        lock (_lock)
+        {
+            return _works.Count;
+        }
+    }
+
+    public bool GetStatus()
+    {
+        lock (_lock)
+        {
+            return IsDone;
+        }
+    }
+
+    public work GetWork()
+    {
+
+        Console.WriteLine($" GetWork() :  Thread Id : {Thread.CurrentThread.ManagedThreadId} is going to acquire the lock to get work");
+        lock (_lock)
+        {
+            Console.WriteLine($"Acquired the lock and going to process the GetWorkPending() method to know the remaining work have to do");
+            while (getWorkPending() == 0)
+            {
+                Console.WriteLine($" Due to No work is there , Consumer thread {Thread.CurrentThread.ManagedThreadId} is about to sleep till the next work is added");
+                Monitor.Wait(_lock); // let the thread be inside the loop till someworksGet
+            }
+
+            //if the thread is coming outside means then some work is added
+
+            Console.WriteLine($"Some work is added Consumer thread  {Thread.CurrentThread.ManagedThreadId} is acquired the lock and going to process the work");
+
+            work currWork = _works[0];
+            _works.Remove(currWork);
+            return currWork;
+        }
+    }
+}
+
+class Consumers
+{
+    private readonly List<Thread> consumers;
+    private readonly int MaxWorkerCount;
+    private readonly DataCenter Dc;
+    public Consumers(int MaxCount, DataCenter DC)
+    {
+        consumers = new List<Thread>();
+        MaxWorkerCount = MaxCount;
+        Dc = DC;
+    }
+
+    public void StartConsumer()
+    {
+        DoWork();
+    }
+
+    private void DoWork()
+    {
+        //creating the consumers
+
+        for(int i=0;i<MaxWorkerCount;i++)
+        {
+            Thread consumer = new Thread(() =>
+            {
+                while(true)
+                {
+                    Console.WriteLine($"Consumer - - > DoWork() ->  Thread ID : {Thread.CurrentThread.ManagedThreadId} is created and going to process ");
+
+                    Console.WriteLine($"{Thread.CurrentThread.ManagedThreadId} is hitting the  ");
+                    work currWork = Dc.GetWork();
+
+                    if (currWork == null)
+                        Console.WriteLine("currWork is null");
+                    else
+                        currWork.DoWork();
+
+                    //we have to gracefully shutdown the threads 
+                    if (Dc.GetStatus() && Dc.getWorkPending() == 0)
+                        break;
+                }
+            });
+
+            consumer.Start(); 
+        }
+    }
+}
+
+class UI
+{
+    public static void Main(string[] args)
+    {
+        DataCenter Dc = new DataCenter();
+        RateLimiter RateLimiter = new RateLimiter(5);
+        RateLimiter.Refill();
+        RequestMiddleWare MiddleWare = new RequestMiddleWare(Dc, RateLimiter);
+        Consumers consumer = new Consumers(3, Dc);
+
+        
+
+        Console.WriteLine("Main thread is starting the consumer service");
+        consumer.StartConsumer();
+        //submit work
+        for(int i=0;i<=15;i++)
+        {
+            Thread th = new Thread(() =>
+            {
+                Console.WriteLine("Main :  work is assigned ");
+                string wrkName = "Wrk_" + i.ToString();
+                work currWork=new work(wrkName);
+                if (i == 5)
+                {
+                    Console.WriteLine($"ThreadId: {Thread.CurrentThread.ManagedThreadId} is sleep for 20000");
+                   // Thread.Sleep(20000);
+                }
+                else if (i == 10)
+                {
+                    Console.WriteLine($"ThreadId: {Thread.CurrentThread.ManagedThreadId} is sleep for 20000");
+                    Thread.Sleep(20000);
+                }
+                else
+                {
+                    Console.WriteLine($"ThreadId: {Thread.CurrentThread.ManagedThreadId} is sleep for 20000");
+                    Thread.Sleep(20000);
+                }
+                    MiddleWare.SubmitRequest(currWork);
+            });
+
+            th.Start();
+        }
+
+        Console.ReadLine();
+
+
+
+
+    }
+}
+
+  
+
+
+
+
