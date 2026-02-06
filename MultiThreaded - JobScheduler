@@ -1,0 +1,213 @@
+using System;
+public class Task
+{
+    public int TaskId { get; set; }
+    public List<int> DepTask {  get; set; }
+    public int DepCount { get; set; }
+    public DateTime ExecuteAt { get; set; }
+
+    public void Executetask()
+    {
+        Console.WriteLine($"Task is executed . . . .  TaskId : {TaskId} at DateTime : {DateTime.UtcNow}");
+    }
+}
+
+public class TaskScheduler
+{
+    private List<Task> tasks=new List<Task>();
+    private List<Task> sortedLists=new List<Task>();
+    private Dictionary<int,List<int>> pairs=new Dictionary<int,List<int>>();
+    private readonly object _lock=new object();
+    private Queue<Task> ProcessTask = new Queue<Task>();
+
+    public TaskScheduler(List<Task> tasks)
+    {
+     this.tasks = tasks;
+     sortedLists=tasks;
+    }
+
+    public void DAGScheduler()
+    {
+        Console.WriteLine("I am going to acquire the lock to prevent accessing the concurrent access to the resources");
+        lock (_lock) 
+        {
+            Console.WriteLine($"Locks captured by  {Thread.CurrentThread.ManagedThreadId}");
+            Console.WriteLine("Started DAG . . . .");
+            foreach (var task in tasks)
+            {
+                List<int> DipTask = task.DepTask;
+                foreach (var dpId in DipTask)
+                {
+                    if(!pairs.ContainsKey(dpId))
+                    {
+                       Console.WriteLine($"adding new Dependent list for this this Task .  initiating the new List for the TaskId  {dpId}");
+                        pairs[dpId] = new List<int>();
+                    }
+
+                    pairs[dpId].Add(task.TaskId);
+                }
+            }
+        }
+
+        Console.WriteLine("DAG done .. Lock released successfully");
+        sortedLists = tasks;
+
+        Console.WriteLine("Lists is sorted for the execution");
+        sortedLists=sortedLists.OrderBy(i=>i.ExecuteAt).ToList();
+    }
+
+    public void ProcessJob()
+    {
+        while(true)
+        {
+
+            Console.WriteLine("Acquiring locks to check the count of the task is scheduled to avoid concurrent modifies");
+
+            lock(_lock)
+            {
+                if (sortedLists.Count == 0)
+                {
+                    Console.WriteLine("Due to there is no other job is pending , Job processor is stopped");
+                    break;
+                }
+                //get the recent execute time if it is greater than now then let wait the thread for that long
+                Task currTask = sortedLists[0];
+                while(currTask.ExecuteAt>DateTime.UtcNow)
+                {
+                    TimeSpan diff=currTask.ExecuteAt-DateTime.UtcNow;
+                    Monitor.Wait(_lock, diff);//this thread will be waiting for till this time
+                }
+                //if the thread is coming out then it is going to be the top level work will have to done
+                if (currTask.DepCount == 0)
+                {
+                    Console.WriteLine("Moving currTask to Processor");
+                    ProcessTask.Enqueue(currTask);
+                    Console.WriteLine("Removing currTask from the queue");
+                    sortedLists.Remove(currTask);
+                    Console.WriteLine("Waking up the thread to process ");
+                    Monitor.PulseAll(_lock);
+                }
+                else
+                {
+                    sortedLists.Remove(currTask);
+                    Console.WriteLine($"CurrTask is not going to process due to dependency {currTask.TaskId}");
+                }
+               
+            }
+
+
+        }
+    }
+
+    public void ExecuteJob()
+    {
+         while(true)
+        {
+            Console.WriteLine("Job Executor is started..");
+
+            lock (_lock)
+            {
+                //what if the many threads are processing the same resource i.e ProcessTask
+                Console.WriteLine("Acquiring lock to check the Enqueue status");
+
+                if(ProcessTask.Count == 0)
+                {
+                    Console.WriteLine($"Due to no other tasks are available , current Thread {Thread.CurrentThread.ManagedThreadId} is going to sleep");
+                    Monitor.Wait(_lock);
+                }
+
+                Task currTask=ProcessTask.Dequeue();
+                currTask.Executetask();
+
+                //reduce the depJobs
+                //we have to acquire the lock to work on the shared resource
+                lock(_lock)
+                {
+                    if (pairs.ContainsKey(currTask.TaskId))
+                    {
+                        Console.WriteLine($"Task : {currTask.TaskId} has been in the dependable for other tasks");
+                        List<int> dipIds = pairs[currTask.TaskId];
+                        for (int i = 0; i < dipIds.Count; i++)
+                        {
+                            //reduce the dipCount
+                            int id=dipIds[i];
+                            Task curr = tasks.Where(i => i.TaskId == id).FirstOrDefault();
+                            if (curr != null)
+                            {
+                                Console.WriteLine("Reducing the depCount");
+                                curr.DepCount--;
+                                if(curr.DepCount == 0)
+                                    ProcessTask.Enqueue(curr);
+                            }
+                        }
+                    }
+                }
+            }
+
+            //Outside lock
+        }
+    }
+}
+
+public class User
+{
+    public static void Main(string[] args)
+    {
+        Console.WriteLine("Main thread started . . . ");
+
+        Task tas1 = new Task();
+        tas1.TaskId = 1;
+        tas1.DepTask = [];
+        tas1.DepCount = 0;
+        tas1.ExecuteAt = DateTime.UtcNow.AddSeconds(11);
+
+        Task tas2 = new Task();
+        tas2.TaskId = 2;
+        tas2.DepTask = [1];
+        tas2.DepCount = 1;
+        tas2.ExecuteAt = DateTime.UtcNow.AddSeconds(6);
+
+        Task tas3 = new Task();
+        tas3.TaskId = 3;
+        tas3.DepTask = [1,2];
+        tas3.DepCount = 2;
+        tas3.ExecuteAt = DateTime.UtcNow.AddSeconds(3);
+
+        Task tas4 = new Task();
+        tas4.TaskId = 4;
+        tas4.DepTask = [1,2,3];
+        tas4.DepCount = 3;
+        tas3.ExecuteAt = DateTime.UtcNow.AddSeconds(2);
+
+        Task tas5 = new Task();
+        tas5.TaskId = 5;
+        tas5.DepTask = [];
+        tas5.DepCount = 0;
+        tas3.ExecuteAt = DateTime.UtcNow.AddSeconds(1);
+
+        List<Task> tasks = new List<Task>();
+        tasks.Add(tas1);
+        tasks.Add(tas2);
+        tasks.Add(tas3);
+        tasks.Add(tas4);
+        tasks.Add(tas5);
+
+        TaskScheduler taskScheduler = new TaskScheduler(tasks);
+
+        Console.WriteLine("Creating a new thread for DAG scheduler");
+        Thread th1 = new Thread(taskScheduler.DAGScheduler);
+        Console.WriteLine("Creating a new Thread for Process Job");
+        Thread th2=new Thread(taskScheduler.ProcessJob);
+        Console.WriteLine("Creating a new thread for Execute Job");
+        Thread th3=new Thread(taskScheduler.ExecuteJob);
+
+        th3.Start();
+        th1.Start();
+        th2.Start();
+
+        th3.Join();
+
+        Console.WriteLine("Main thread is waiting for the execution");
+        Console.ReadLine();
+    }
+}
