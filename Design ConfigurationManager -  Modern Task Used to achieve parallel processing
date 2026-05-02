@@ -1,0 +1,76 @@
+public async Task ExecuteAsync()
+{
+    var stop = DateTime.Now.AddSeconds(5);
+
+    while (DateTime.Now < stop)
+    {
+        ConfigFile configFile = _configManager.GetCurrentConfigFile();
+
+        Console.WriteLine(
+            $"[READ ] Thread={Thread.CurrentThread.ManagedThreadId,-5} " +
+            $"Version={configFile.GetVersionId()} " +
+            $"| IsFeatureAdded={configFile.GetProp("IsFeatureAdded")} " +
+            $"| Time={DateTime.Now:HH:mm:ss.fff}");
+
+        await Task.Delay(500); // ✅ non-blocking
+    }
+
+    Console.WriteLine($"[READ ] finished.");
+}
+
+static async Task Writer1()
+{
+    var manager = ConfigurationManager.GetConfigManagerInstance();
+
+    manager.AddConfigFile(new ConfigFile(1, new Dictionary<string, string>
+    {
+        ["IsFeatureAdded"] = "Enabled"
+    }));
+
+    await Task.Delay(1000);
+
+    manager.AddConfigFile(new ConfigFile(2, new Dictionary<string, string>
+    {
+        ["IsFeatureAdded"] = "Disabled"
+    }));
+
+    Console.WriteLine($"[WRITE] Writer1 finished.");
+}
+
+static async Task Writer2()
+{
+    var manager = ConfigurationManager.GetConfigManagerInstance();
+
+    await Task.Delay(3000);
+
+    manager.AddConfigFile(new ConfigFile(3, new Dictionary<string, string>
+    {
+        ["IsFeatureAdded"] = "Enabled"
+    }));
+
+    Console.WriteLine($"[WRITE] Writer2 finished.");
+}
+
+static async Task Main(string[] args)
+{
+    var manager = ConfigurationManager.GetConfigManagerInstance();
+
+    manager.AddConfigFile(new ConfigFile(1, new Dictionary<string, string>{
+        ["IsFeatureAdded"] = "Enabled"
+    }));
+
+    ClassA readerA1 = new ClassA();
+    ClassA readerA2 = new ClassA();
+    ClassB readerB1 = new ClassB();
+
+    var t1 = Task.Run(() => readerA1.ExecuteAsync());
+    var t2 = Task.Run(() => readerA2.ExecuteAsync());
+    var t3 = Task.Run(() => readerB1.ExecuteAsync());
+
+    var t4 = Writer1();
+    var t5 = Writer2();
+
+    await Task.WhenAll(t1, t2, t3, t4, t5);
+
+    Console.WriteLine("\nAll tasks finished.");
+}
