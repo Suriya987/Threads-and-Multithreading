@@ -1,0 +1,224 @@
+  using System;
+using System.Collections.Generic;
+using System.Threading;
+
+namespace ConfigManager;
+
+public class ConfigFile
+{
+    private readonly int _versionId;
+    private readonly Dictionary<string, string> _properties;
+
+    public ConfigFile(int versionId, Dictionary<string, string> prop)
+    {
+        if (prop == null || prop.Count == 0)
+            throw new ArgumentException("Properties cannot be null or empty.");
+
+        _versionId = versionId;
+        _properties = new Dictionary<string, string>(prop);
+    }
+
+    public string GetProp(string key) =>
+        _properties.TryGetValue(key, out var val) ? val : null;
+
+    public int GetVersionId() => _versionId;
+}
+
+public sealed class ConfigurationManager
+{
+    // ── Singleton ──────────────────────────────────────────────
+    private static volatile ConfigurationManager _instance;
+    private static readonly object _instanceLock = new object();
+
+    public static ConfigurationManager GetConfigManagerInstance()
+    {
+        if (_instance == null)
+        {
+            lock (_instanceLock)
+            {
+                if (_instance == null)
+                    _instance = new ConfigurationManager();
+            }
+        }
+        return _instance;
+    }
+
+    // ── State ──────────────────────────────────────────────────
+    private volatile ConfigFile _currentConfigFile;
+    private readonly List<ConfigFile> _configHistory = new List<ConfigFile>();
+    private readonly object _writeLock = new object();
+
+    private ConfigurationManager() { }
+
+    // ── Write ──────────────────────────────────────────────────
+    public void AddConfigFile(ConfigFile configFile)
+    {
+        if (configFile == null)
+            throw new ArgumentNullException(nameof(configFile));
+
+        lock (_writeLock)
+        {
+            _configHistory.Add(configFile);
+            _currentConfigFile = configFile;
+
+            if (_configHistory.Count > 4)
+                _configHistory.RemoveRange(0, 3);
+
+            Console.WriteLine(
+                $"[WRITE] Thread={Thread.CurrentThread.Name,-10} " +
+                $"pushed Version={configFile.GetVersionId()} " +
+                $"| IsFeatureAdded={configFile.GetProp("IsFeatureAdded")} " +
+                $"| Time={DateTime.Now:HH:mm:ss.fff}");
+
+            // wake up all waiting reader threads
+            Monitor.PulseAll(_writeLock);
+        }
+    }
+
+    // ── Read ───────────────────────────────────────────────────
+    public ConfigFile GetCurrentConfigFile()
+    {
+        if (_currentConfigFile == null)
+            throw new InvalidOperationException(
+                "ConfigurationManager not initialised. Call AddConfigFile first.");
+        return _currentConfigFile;
+    }
+}
+
+class ClassA
+{
+    private readonly ConfigurationManager _configManager
+        = ConfigurationManager.GetConfigManagerInstance();
+
+    public void Execute()
+    {
+        var stop = DateTime.Now.AddSeconds(5);
+        while (DateTime.Now < stop)
+        {
+            ConfigFile configFile = _configManager.GetCurrentConfigFile();
+            Console.WriteLine(
+                $"[READ ] Thread={Thread.CurrentThread.Name,-10} " +
+                $"Version={configFile.GetVersionId()} " +
+                $"| IsFeatureAdded={configFile.GetProp("IsFeatureAdded")} " +
+                $"| Time={DateTime.Now:HH:mm:ss.fff}");
+
+            Thread.Sleep(500);
+        }
+        Console.WriteLine(
+            $"[READ ] Thread={Thread.CurrentThread.Name,-10} finished.");
+    }
+}
+
+class ClassB
+{
+    private readonly ConfigurationManager _configManager
+        = ConfigurationManager.GetConfigManagerInstance();
+
+    public void Execute()
+    {
+        var stop = DateTime.Now.AddSeconds(5);
+        while (DateTime.Now < stop)
+        {
+            ConfigFile configFile = _configManager.GetCurrentConfigFile();
+            Console.WriteLine(
+                $"[READ ] Thread={Thread.CurrentThread.Name,-10} " +
+                $"Version={configFile.GetVersionId()} " +
+                $"| IsFeatureAdded={configFile.GetProp("IsFeatureAdded")} " +
+                $"| Time={DateTime.Now:HH:mm:ss.fff}");
+
+            Thread.Sleep(500);
+        }
+        Console.WriteLine(
+            $"[READ ] Thread={Thread.CurrentThread.Name,-10} finished.");
+    }
+}
+
+class User
+{
+    static void Main(string[] args)
+    {
+        ConfigurationManager manager
+            = ConfigurationManager.GetConfigManagerInstance();
+
+        manager.AddConfigFile(new ConfigFile(1, new Dictionary<string, string>{
+        ["IsFeatured"] = "Enabled"
+        }));
+
+        // ── Create reader threads ──────────────────────────────
+        ClassA readerA1 = new ClassA();
+        ClassA readerA2 = new ClassA();
+        ClassB readerB1 = new ClassB();
+
+        Thread t1 = new Thread(readerA1.Execute);
+        Thread t2 = new Thread(readerA2.Execute);
+        Thread t3 = new Thread(readerB1.Execute);
+
+        t1.Name = "Reader-1";
+        t2.Name = "Reader-2";
+        t3.Name = "Reader-3";
+
+        // ── Create writer threads ──────────────────────────────
+        Thread t4 = new Thread(Writer1);
+        Thread t5 = new Thread(Writer2);
+
+        t4.Name = "Writer-1";
+        t5.Name = "Writer-2";
+
+        // ── Start all threads ──────────────────────────────────
+        t1.Start();
+        t2.Start();
+        t3.Start();
+        t4.Start();
+        t5.Start();
+
+        // ── Wait for all threads to finish ─────────────────────
+        t1.Join();
+        t2.Join();
+        t3.Join();
+        t4.Join();
+        t5.Join();
+
+        Console.WriteLine("\nAll threads finished.");
+        Console.ReadLine();
+    }
+
+    // ── Writer methods — each pushes one version ───────────────
+    static void Writer1()
+    {
+        ConfigurationManager manager
+            = ConfigurationManager.GetConfigManagerInstance();
+
+        // seed initial config immediately
+        manager.AddConfigFile(new ConfigFile(1, new Dictionary<string, string>
+        {
+            ["IsFeatureAdded"] = "Enabled"
+        }));
+
+        // wait 1 second then push version 2
+        Thread.Sleep(1000);
+
+        manager.AddConfigFile(new ConfigFile(2, new Dictionary<string, string>
+        {
+            ["IsFeatureAdded"] = "Disabled"
+        }));
+
+        Console.WriteLine($"[WRITE] Thread={Thread.CurrentThread.Name,-10} finished.");
+    }
+
+    static void Writer2()
+    {
+        ConfigurationManager manager
+            = ConfigurationManager.GetConfigManagerInstance();
+
+        // wait 3 seconds then push version 3
+        Thread.Sleep(3000);
+
+        manager.AddConfigFile(new ConfigFile(3, new Dictionary<string, string>
+        {
+            ["IsFeatureAdded"] = "Enabled"
+        }));
+
+        Console.WriteLine(
+            $"[WRITE] Thread={Thread.CurrentThread.Name,-10} finished.");
+    }
+}
